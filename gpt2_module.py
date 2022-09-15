@@ -216,13 +216,14 @@ class GPT2Module(nn.Module):
             hidden_states = layer_output
         hidden_states = self.linear(hidden_states)
         return hidden_states 
+process = psutil.Process(os.getpid())
+print("Memory usage before creating model:", process.memory_info().rss/1024/1024/1024, "GB")
 loss_fn = nn.MSELoss()
 model = GPT2Module(config)
 print(model, sys.getsizeof(model))
-
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 input = torch.clamp(torch.randn(2,config.seq_len), min=1, max=config.vocab_size-1).to(torch.int32)
-process = psutil.Process(os.getpid())
+
 for i in range(1000):
     print("Parameter memory usage:", process.memory_info().rss/1024/1024/1024, "GB")
     res = model(input)
