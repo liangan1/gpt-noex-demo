@@ -4,11 +4,13 @@ import math
 import sys
 import psutil
 import os 
-
+from argparse import ArgumentParser, REMAINDER
+import intel_extension_for_pytorch as ipex
+import time 
 class Config:
      def __init__(self):
          self.hidden_size = 6144
-         self.num_hidden_layers = 11
+         self.num_hidden_layers = 44
          self.vocab_size = 50432
          self.pad_token_id = 0
          self.layer_norm_eps = 0.00001
@@ -216,22 +218,33 @@ class GPT2Module(nn.Module):
             hidden_states = layer_output
         hidden_states = self.linear(hidden_states)
         return hidden_states 
-process = psutil.Process(os.getpid())
-print("Memory usage before creating model:", process.memory_info().rss/1024/1024/1024, "GB")
+
+parser = ArgumentParser()
+parser.add_argument("--fp32", action='store_true', default=False,
+                        help="Enable FP32")
+args=parser.parse_args()
+
 loss_fn = nn.MSELoss()
+process = psutil.Process(os.getpid())
+print("Memory usage:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)
 model = GPT2Module(config)
-print(model, sys.getsizeof(model))
+print("Memory usage before ipex.optimize:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16 if not args.fp32 else torch.float, inplace=True)
+print("Memory usage after  ipex.optimize:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)
 input = torch.clamp(torch.randn(2,config.seq_len), min=1, max=config.vocab_size-1).to(torch.int32)
 
 for i in range(1000):
-    print("Parameter memory usage:", process.memory_info().rss/1024/1024/1024, "GB")
-    res = model(input)
-    loss =  loss_fn(res,res)
-    print("Memory usage after forward and before backward:", process.memory_info().rss/1024/1024/1024, "GB")
-    loss.backward()
-    print(loss)
-    print("Memory usage after backward and before optimizer step:", process.memory_info().rss/1024/1024/1024, "GB")    
+    print("Parameter memory usage:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)
+    start = time.time()
+    with torch.cpu.amp.autocast(enabled=not args.fp32):
+        res = model(input)
+        loss =  loss_fn(res,res)
+        print("Memory usage after forward and before backward:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)
+        loss.backward()
+        print("Memory usage after backward and before optimizer step:", process.memory_info().rss/1024/1024/1024, "GB", flush=True)    
     optimizer.step()
+    end = time.time()
+    print("********Iteration {}: {} ms/it, dtype= {}**********".format(i, 1000*(end-start), 'fp32' if args.fp32 else 'bf16'))
 
 
